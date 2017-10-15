@@ -1,3 +1,11 @@
+# LEDs
+```
+[] - []
+[] - []
+[] - []
+[] - []
+```
+
 # Buttons
 [left] [right] - [select] [cancel]
 
