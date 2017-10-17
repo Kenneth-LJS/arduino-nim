@@ -9,31 +9,76 @@ const int BUTTON_LEFT = 7;
 const int BUTTON_RIGHT = 6;
 const int BUTTON_SELECT = 5;
 const int BUTTON_CANCEL = 4;
+const int OFFSET_BUTTON_ARRAY = BUTTON_LEFT;
 
 // State labels
-const int STATE_INACTIVE = 0;
-const int STATE_ACTIVE = 1;
-const int STATE_CHOOSE_OPPONENT = 2;
-const int STATE_PLAYING = 3;
+const int STATE_IDLE = 0;
+const int STATE_GAME_IDLE = 1;
+const int STATE_CHOOSE_FIRST_PLAYER = 2;
+const int STATE_GAME_REMOVAL = 3;
+const int STATE_GAME_END = 4;
 
 // Misc labels
-const int OPPONENT_HUMAN = 99;
-const int OPPONENT_AI = 98;
+const int PLAYER_HUMAN = 99;
+const int PLAYER_AI = 98;
 
 // Fixed patterns
 int x[] = {HIGH, LOW, HIGH, LOW};
 int y[] = {LOW, HIGH, LOW, HIGH};
 int on[] = {HIGH, HIGH, HIGH, HIGH};
 int off[] = {LOW, LOW, LOW, LOW};
-int opp[] = {LOW, HIGH, HIGH, LOW};
+int player[] = {LOW, HIGH, HIGH, LOW};
+int end[] = {HIGH, LOW, LOW, HIGH};
 
-// Variables
-int currentState = STATE_INACTIVE;
-int opponent = OPPONENT_HUMAN;
+// Misc constants
+const byte ledArrayIntervalMicros = 1;
+const unsigned long ledBlinkIntervalMicros = 70000;
+const int buttonResponseIntervalMillis = 50;
 
-// Lights up the leds based on the x and y arrays
-// takes 2 ms to multiplex through
+// Variables: general
+int currentState = STATE_IDLE;
+int currentLedCol = X; // for multiplexing the array lighting
+unsigned long lastPrintTimeMillis = 0;
+
+// Variables: buttons
+unsigned long prevLedArrayTimeMicros = 0;
+unsigned long prevButtonTimeMillis[] = {0,0,0,0};
+bool buttonPushed[] = {false,false,false,false};
+bool buttonPushedTemp[] = {false,false,false,false};
+
+// Variables: game
+int gameState[2][4] = {{1,1,1,1},{1,1,1,1}};
+int firstPlayer = PLAYER_HUMAN;
+int currentPlayer = firstPlayer;
+int removeFrom = X;
+int removeCount = 1;
+
+// Function declarations
+void lightup();
+void playAI();
+
 void lightup(int x[], int y[]) {
+  if (micros() - prevLedArrayTimeMicros > ledArrayIntervalMicros) {
+    int* ledColConfig;
+    if (currentLedCol == Y) {
+      ledColConfig = x;
+      currentLedCol = X;
+    } else {
+      ledColConfig = y;
+      currentLedCol = Y;
+    }
+    lightsOff();
+    digitalWrite(currentLedCol, LOW);
+    digitalWrite(A, ledColConfig[0]);
+    digitalWrite(B, ledColConfig[1]);
+    digitalWrite(C, ledColConfig[2]);
+    digitalWrite(D, ledColConfig[3]);
+    prevLedArrayTimeMicros = micros();
+  }
+}
+
+void oldlightup(int x[], int y[]) {
+  lightsOff();
   digitalWrite(X, LOW);
   digitalWrite(Y, HIGH);
   digitalWrite(A, x[0]);
@@ -41,6 +86,7 @@ void lightup(int x[], int y[]) {
   digitalWrite(C, x[2]);
   digitalWrite(D, x[3]);
   delay(1);
+  lightsOff();
   digitalWrite(X, HIGH);
   digitalWrite(Y, LOW);
   digitalWrite(A, y[0]);
@@ -50,32 +96,265 @@ void lightup(int x[], int y[]) {
   delay(1);
 }
 
-void lightupFor(int x[], int y[], int ms) {
-  for (int i = 0; i < ms/2; i++) {
-    lightup(x, y);
-  }
-}
-
 void lightsOff() {
-  lightup(off, off);
+  digitalWrite(X, HIGH);
+  digitalWrite(Y, HIGH);
+  digitalWrite(A, LOW);
+  digitalWrite(B, LOW);
+  digitalWrite(C, LOW);
+  digitalWrite(D, LOW);
 }
 
-void lightOpponent() {
-  int blinkInterval = 70;
-  if (opponent == OPPONENT_HUMAN) {
-    lightupFor(opp, off, blinkInterval);
+void lightFirstPlayer() {
+  if (firstPlayer == PLAYER_HUMAN) {
+    lightup(player, off);
   } else {
-    lightupFor(off, opp, blinkInterval);
+    lightup(off, player);
   }
-  lightupFor(off, off, blinkInterval);
 }
 
-int isPressed(int buttonPort) {
-  return 1 - digitalRead(buttonPort);
+bool isHeld(int buttonPort) {
+  return (1 - digitalRead(buttonPort)) == 1;
+}
+
+int convertPort(int portOrIndex) {
+  return OFFSET_BUTTON_ARRAY - portOrIndex;
+}
+
+bool isPressed(int buttonPort) {
+  return buttonPushed[convertPort(buttonPort)];
 }
 
 bool isIn(int state) {
   return currentState == state;
+}
+
+void initGame() {
+  firstPlayer = PLAYER_HUMAN;
+  removeFrom = X;
+  removeCount = 1;
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 4; j++) {
+      gameState[i][j] = 1;
+    }
+  }
+}
+
+void stateIdleRoutine() {
+  lightsOff();
+  if (isPressed(BUTTON_SELECT)) {
+    initGame();
+    currentState = STATE_CHOOSE_FIRST_PLAYER;
+  }
+
+  // debugging only
+  if (isHeld(BUTTON_LEFT)) {
+    int x[] = {1, 0, 0, 0};
+    int y[] = {0, 0, 0, 1};
+    lightup(on, on);
+  }
+}
+
+void stateChooseFirstPlayerRoutine() {
+  lightFirstPlayer();
+  if (isPressed(BUTTON_CANCEL)) {
+    currentState = STATE_IDLE;
+
+  } else if (isPressed(BUTTON_LEFT)) {
+    firstPlayer = PLAYER_HUMAN;
+
+  } else if (isPressed(BUTTON_RIGHT)) {
+    firstPlayer = PLAYER_AI;
+
+  } else if (isPressed(BUTTON_SELECT)) {
+    currentPlayer = firstPlayer;
+    currentState = STATE_GAME_IDLE;
+  }
+}
+
+void lightGame() {
+  lightup(gameState[0], gameState[1]);
+}
+
+void stateGameIdleRoutine() {
+  if (currentPlayer == PLAYER_AI) {
+    playAI();
+    if (hasGameEnded()) return;
+    currentPlayer = PLAYER_HUMAN;
+  }
+  lightGame();
+  if (isPressed(BUTTON_LEFT)) {
+    removeFrom = X;
+    currentState = STATE_GAME_REMOVAL;
+
+  } else if (isPressed(BUTTON_RIGHT)) {
+    removeFrom = Y;
+    currentState = STATE_GAME_REMOVAL;
+
+  } else if (isPressed(BUTTON_CANCEL)) {
+    currentState = STATE_IDLE;
+  }
+}
+
+int availableForRemoval() {
+  return availableForRemoval(removeFrom);
+}
+
+int availableForRemoval(int col) {
+  int c = X - col;
+  int remaining = 0;
+  for (int i = 3; i >= 0; i--) {
+    if (gameState[c][i] == 0) {
+      return remaining;
+    }
+    remaining++;
+  }
+  return remaining;
+}
+
+void cycleRemoveCount() {
+  removeCount++;
+  if (removeCount > availableForRemoval()) {
+    removeCount = 1;
+  }
+}
+
+void performRemoval() {
+  int c = X - removeFrom;
+  int toRemove = removeCount;
+  removeCount = 1;
+  for (int i = 0; i < 4; i++) {
+    if (gameState[c][i] == 1 && toRemove > 0) {
+      toRemove--;
+      gameState[c][i] = 0;
+    }
+  }
+}
+
+void playAI() {
+  removeFrom = Y;
+  removeCount = 1;
+  if (availableForRemoval() == 0) {
+    removeFrom = X;
+    if (availableForRemoval() == 0) {
+      return;
+    }
+  }
+  performRemoval();
+}
+
+bool hasGameEnded() {
+  if (availableForRemoval(X) == 0 && availableForRemoval(Y) == 0) {
+    currentState = STATE_GAME_END;
+    return true;
+  }
+  return false;
+}
+
+void stateGameRemovalRoutine() {
+  int btn = removeFrom == X ? BUTTON_LEFT : BUTTON_RIGHT;
+  if (isPressed(btn)) {
+    cycleRemoveCount();
+
+  } else if (isPressed(BUTTON_SELECT)) {
+    performRemoval();
+    if (hasGameEnded()) return;
+    currentPlayer = PLAYER_AI;
+    currentState = STATE_GAME_IDLE;
+
+  } else if (isPressed(BUTTON_CANCEL)) {
+    currentState = STATE_GAME_IDLE;
+    removeCount = 1;
+  }
+}
+
+bool isAnyPressed() {
+  return isPressed(BUTTON_LEFT) || isPressed(BUTTON_RIGHT) || isPressed(BUTTON_CANCEL) || isPressed(BUTTON_SELECT);
+}
+
+void stateGameEndRoutine() {
+  lightup(end, end);
+  if (isAnyPressed()) {
+    currentState = STATE_IDLE;
+  }
+}
+
+bool isButtonPushed(int buttonPort) {
+  return buttonPushed[convertPort(buttonPort)];
+}
+
+void checkButtons() {
+  for (int i = 0; i < 4; i++) {
+    int buttonPort = convertPort(i);
+    if (isButtonPushed(buttonPort)) {
+      continue;
+    }
+    if (isHeld(buttonPort)) {
+      if (!buttonPushedTemp[i]) {
+        prevButtonTimeMillis[i] = millis();
+      }
+    } else {
+      if (buttonPushedTemp[i]) {
+        if (millis() - prevButtonTimeMillis[i] > buttonResponseIntervalMillis) {
+          buttonPushed[i] = true;
+        }
+      }
+    }
+    buttonPushedTemp[i] = isHeld(buttonPort);
+  }
+}
+
+void printButtons() {
+  if (millis() - lastPrintTimeMillis < 1000) {
+    return;
+  }
+  lastPrintTimeMillis = millis();
+  for (int i = 0; i < 4; i++) {
+    Serial.print(buttonPushed[i]);
+    Serial.print(" ");
+  }
+  Serial.println();
+}
+
+String stateText() {
+  switch(currentState) {
+    case 0 :
+    return "Idle";
+    case 1 :
+    return "Game Idle";
+    case 2 :
+    return "Choose 1P";
+    case 3 :
+    return "Game Removal";
+    case 4 :
+    return "Game End";
+    default :
+    return "Invalid State";
+  }
+}
+
+void printVars() {
+  if (millis() - lastPrintTimeMillis < 1000) {
+    return;
+  }
+  lastPrintTimeMillis = millis();
+  String gs = String("");
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 4; j++) {
+      gs = gs + String(gameState[i][j]) + " ";
+    }
+    if (i == 0) gs = gs + "| ";
+  }
+  Serial.println(gs);
+  Serial.println("Removes " + String(removeCount));
+  Serial.println("Remaining " + String(availableForRemoval()));
+  Serial.println(stateText());
+}
+
+void clearButtons() {
+  for (int i = 0; i < 4; i++) {
+    buttonPushed[i] = false;
+  }
 }
 
 void setup() {
@@ -96,29 +375,23 @@ void setup() {
 }
 
 void loop() {
-  lightsOff();
-  if (isIn(STATE_INACTIVE)) {
-    lightsOff();
-    if (isPressed(BUTTON_SELECT)) {
-      currentState = STATE_CHOOSE_OPPONENT;
-      opponent = OPPONENT_HUMAN;
-    }
+  checkButtons();
+  printVars();
+  if (isIn(STATE_IDLE)) {
+    stateIdleRoutine();
 
-  } else if (isIn(STATE_CHOOSE_OPPONENT)) {
-    if (isPressed(BUTTON_CANCEL)) {
-      currentState = STATE_INACTIVE;
-    } else if (isPressed(BUTTON_LEFT)) {
-      opponent = OPPONENT_HUMAN;
-    } else if (isPressed(BUTTON_RIGHT)) {
-      opponent = OPPONENT_AI;
-    }
-    lightOpponent();
+  } else if (isIn(STATE_CHOOSE_FIRST_PLAYER)) {
+    stateChooseFirstPlayerRoutine();
 
-  } else if (isIn(STATE_ACTIVE)) {
-    lightup(on, on);
-    if (isPressed(BUTTON_CANCEL)) {
-      currentState = STATE_INACTIVE;
-    }
+  } else if (isIn(STATE_GAME_IDLE)) {
+    stateGameIdleRoutine();
+
+  } else if (isIn(STATE_GAME_REMOVAL)) {
+    stateGameRemovalRoutine();
+
+  } else if (isIn(STATE_GAME_END)) {
+    stateGameEndRoutine();
 
   }
+  clearButtons();
 }
