@@ -23,16 +23,14 @@ const int PLAYER_HUMAN = 99;
 const int PLAYER_AI = 98;
 
 // Fixed patterns
-// int x[] = {HIGH, LOW, HIGH, LOW};
-// int y[] = {LOW, HIGH, LOW, HIGH};
 int on[] = {HIGH, HIGH, HIGH, HIGH};
 int off[] = {LOW, LOW, LOW, LOW};
-int player[] = {LOW, HIGH, HIGH, LOW};
-int end[] = {HIGH, LOW, LOW, HIGH};
+int player[] = {0, 2, 2, 0};
+int end[] = {2, 0, 0, 2};
 
 // Misc constants
 const int ledArrayIntervalMicros = 1;
-const unsigned long ledBlinkIntervalMillis = 1000;
+const unsigned long ledBlinkIntervalMillis = 200;
 const int buttonResponseIntervalMillis = 50;
 const int printIntervalMillis = 500;
 
@@ -60,6 +58,7 @@ int removeCount = 1;
 void lightup();
 void playAI();
 
+// display a solid light
 void lightup(int x[], int y[]) {
   if (micros() - prevLedArrayTimeMicros > ledArrayIntervalMicros) {
     int* ledColConfig;
@@ -80,6 +79,8 @@ void lightup(int x[], int y[]) {
   }
 }
 
+// takes in a config array for each column
+// blinks when config[i] is 2, solid when 1, off when 0
 void blinkup(int x[], int y[]) {
   if (micros() - prevLedArrayTimeMicros > ledArrayIntervalMicros) {
     int* ledColConfig;
@@ -91,22 +92,17 @@ void blinkup(int x[], int y[]) {
       currentLedCol = Y;
     }
     int config[] = {LOW, LOW, LOW, LOW};
-    // already decided which config to show
-    // now need to decide whether 2 is on or off
     for (int i = 0; i < 4; i++) {
-      config[i] = ledColConfig[i] == 1 ? HIGH : LOW;
+      if (ledColConfig[i] == 2) {
+        config[i] = ledBlinkOn ? HIGH : LOW;
+      } else {
+        config[i] = ledColConfig[i] == 1 ? HIGH : LOW;
+      }
     }
     if (millis() - prevLedBlinkTimeMillis > ledBlinkIntervalMillis) {
       ledBlinkOn = !ledBlinkOn;
       prevLedBlinkTimeMillis = millis();
-      for (int i = 0; i < 4; i++) {
-        if (ledColConfig[i] == 2) {
-          config[i] = ledBlinkOn ? HIGH : LOW;
-        }
-      }
-      // problem, not blinking
     }
-
     lightsOff();
     digitalWrite(currentLedCol, LOW);
     digitalWrite(A, config[0]);
@@ -117,25 +113,7 @@ void blinkup(int x[], int y[]) {
   }
 }
 
-void oldlightup(int x[], int y[]) {
-  lightsOff();
-  digitalWrite(X, LOW);
-  digitalWrite(Y, HIGH);
-  digitalWrite(A, x[0]);
-  digitalWrite(B, x[1]);
-  digitalWrite(C, x[2]);
-  digitalWrite(D, x[3]);
-  delay(1);
-  lightsOff();
-  digitalWrite(X, HIGH);
-  digitalWrite(Y, LOW);
-  digitalWrite(A, y[0]);
-  digitalWrite(B, y[1]);
-  digitalWrite(C, y[2]);
-  digitalWrite(D, y[3]);
-  delay(1);
-}
-
+// turns off all lights
 void lightsOff() {
   digitalWrite(X, HIGH);
   digitalWrite(Y, HIGH);
@@ -145,30 +123,36 @@ void lightsOff() {
   digitalWrite(D, LOW);
 }
 
+// light up the game board during the selection of the first player
 void lightFirstPlayer() {
   if (firstPlayer == PLAYER_HUMAN) {
-    lightup(player, off);
+    blinkup(player, off);
   } else {
-    lightup(off, player);
+    blinkup(off, player);
   }
 }
 
+// simple check to see if the button is currently being held down
 bool isHeld(int buttonPort) {
   return (1 - digitalRead(buttonPort)) == 1;
 }
 
+// changes between the button port and the button array index
 int convertPort(int portOrIndex) {
   return OFFSET_BUTTON_ARRAY - portOrIndex;
 }
 
+// check the isButtonPushed flag, not simply the hardware button
 bool isPressed(int buttonPort) {
   return buttonPushed[convertPort(buttonPort)];
 }
 
+// checks the state that the system is in
 bool isIn(int state) {
   return currentState == state;
 }
 
+// reset game variables
 void initGame() {
   firstPlayer = PLAYER_HUMAN;
   removeFrom = X;
@@ -180,14 +164,15 @@ void initGame() {
   }
 }
 
-void stateIdleRoutine() {
+// task for the idle state
+void stateIdleTask() {
   lightsOff();
   if (isPressed(BUTTON_SELECT)) {
     initGame();
     currentState = STATE_CHOOSE_FIRST_PLAYER;
   }
 
-  // debugging only
+  // debugging only. these buttons should have no effect otherwise.
   if (isHeld(BUTTON_LEFT)) {
     int x[] = {1, 0, 0, 0};
     int y[] = {0, 0, 0, 1};
@@ -199,7 +184,8 @@ void stateIdleRoutine() {
   }
 }
 
-void stateChooseFirstPlayerRoutine() {
+// task for the choose first player state
+void stateChooseFirstPlayerTask() {
   lightFirstPlayer();
   if (isPressed(BUTTON_CANCEL)) {
     currentState = STATE_IDLE;
@@ -216,11 +202,13 @@ void stateChooseFirstPlayerRoutine() {
   }
 }
 
+// display the game board
 void lightGame() {
   lightup(gameState[0], gameState[1]);
 }
 
-void stateGameIdleRoutine() {
+// task for the game-idle state
+void stateGameIdleTask() {
   if (currentPlayer == PLAYER_AI) {
     playAI();
     if (hasGameEnded()) return;
@@ -228,22 +216,28 @@ void stateGameIdleRoutine() {
   }
   lightGame();
   if (isPressed(BUTTON_LEFT)) {
-    removeFrom = X;
-    currentState = STATE_GAME_REMOVAL;
+    if (availableForRemoval(X) > 0) {
+      removeFrom = X;
+      currentState = STATE_GAME_REMOVAL;
+    }
 
   } else if (isPressed(BUTTON_RIGHT)) {
-    removeFrom = Y;
-    currentState = STATE_GAME_REMOVAL;
+    if (availableForRemoval(Y) > 0) {
+      removeFrom = Y;
+      currentState = STATE_GAME_REMOVAL;
+    }
 
   } else if (isPressed(BUTTON_CANCEL)) {
     currentState = STATE_IDLE;
   }
 }
 
+// returns how many objects can be removed from the selected heap
 int availableForRemoval() {
   return availableForRemoval(removeFrom);
 }
 
+// returns how many objects can be removed from a specified heap
 int availableForRemoval(int col) {
   int c = X - col;
   int remaining = 0;
@@ -256,6 +250,7 @@ int availableForRemoval(int col) {
   return remaining;
 }
 
+// cycle through the number of possible objects to be removed
 void cycleRemoveCount() {
   removeCount++;
   if (removeCount > availableForRemoval()) {
@@ -263,6 +258,7 @@ void cycleRemoveCount() {
   }
 }
 
+// perform the removal and update the game state
 void performRemoval() {
   int c = X - removeFrom;
   int toRemove = removeCount;
@@ -275,6 +271,7 @@ void performRemoval() {
   }
 }
 
+// runs the logic for the AI
 void playAI() {
   removeFrom = Y;
   removeCount = 1;
@@ -287,6 +284,7 @@ void playAI() {
   performRemoval();
 }
 
+// check to see if the game has ended, set the system state if yes
 bool hasGameEnded() {
   if (availableForRemoval(X) == 0 && availableForRemoval(Y) == 0) {
     currentState = STATE_GAME_END;
@@ -295,8 +293,29 @@ bool hasGameEnded() {
   return false;
 }
 
-void stateGameRemovalRoutine() {
+// display the objects selected for removal
+void lightRemoval() {
+  int c = X - removeFrom;
+  int remCol[] = {0,0,0,0};
+  int toRemove = removeCount;
+  for (int i = 0; i < 4; i++) {
+    remCol[i] = gameState[c][i];
+    if (remCol[i] == 1 && toRemove > 0) {
+      remCol[i] = 2;
+      toRemove--;
+    }
+  }
+  if (removeFrom == X) {
+    blinkup(remCol, gameState[1]);
+  } else {
+    blinkup(gameState[0], remCol);
+  }
+}
+
+// task for the game-removal state
+void stateGameRemovalTask() {
   int btn = removeFrom == X ? BUTTON_LEFT : BUTTON_RIGHT;
+  lightRemoval();
   if (isPressed(btn)) {
     cycleRemoveCount();
 
@@ -312,11 +331,13 @@ void stateGameRemovalRoutine() {
   }
 }
 
+// check if any button is pressed (checking flag)
 bool isAnyPressed() {
   return isPressed(BUTTON_LEFT) || isPressed(BUTTON_RIGHT) || isPressed(BUTTON_CANCEL) || isPressed(BUTTON_SELECT);
 }
 
-void stateGameEndRoutine() {
+// task for the game-end state
+void stateGameEndTask() {
   if (currentPlayer == PLAYER_AI) {
     lightup(end, off);
   } else {
@@ -327,14 +348,12 @@ void stateGameEndRoutine() {
   }
 }
 
-bool isButtonPushed(int buttonPort) {
-  return buttonPushed[convertPort(buttonPort)];
-}
-
+// sets flag if button has been held down for more than some time
+// and then let go. i.e. flag is set only when button goes down and then up again.
 void checkButtons() {
   for (int i = 0; i < 4; i++) {
     int buttonPort = convertPort(i);
-    if (isButtonPushed(buttonPort)) {
+    if (isPressed(buttonPort)) {
       continue;
     }
     if (isHeld(buttonPort)) {
@@ -352,6 +371,7 @@ void checkButtons() {
   }
 }
 
+// just print the button flags
 void printButtons() {
   if (millis() - lastPrintTimeMillis < printIntervalMillis) {
     return;
@@ -364,6 +384,7 @@ void printButtons() {
   Serial.println();
 }
 
+// construct the game state in string form for printing
 String stateText() {
   switch(currentState) {
     case 0 :
@@ -381,6 +402,7 @@ String stateText() {
   }
 }
 
+// print some variables every few millis
 void printVars() {
   if (millis() - lastPrintTimeMillis < 1000) {
     return;
@@ -399,6 +421,7 @@ void printVars() {
   Serial.println(stateText());
 }
 
+// clears the button flags
 void clearButtons() {
   for (int i = 0; i < 4; i++) {
     buttonPushed[i] = false;
@@ -419,26 +442,27 @@ void setup() {
   pinMode(BUTTON_RIGHT, INPUT_PULLUP);
   pinMode(BUTTON_SELECT, INPUT_PULLUP);
   pinMode(BUTTON_CANCEL, INPUT_PULLUP);
+
   lightsOff();
 }
 
 void loop() {
   checkButtons();
-  printVars();
+  // printVars();
   if (isIn(STATE_IDLE)) {
-    stateIdleRoutine();
+    stateIdleTask();
 
   } else if (isIn(STATE_CHOOSE_FIRST_PLAYER)) {
-    stateChooseFirstPlayerRoutine();
+    stateChooseFirstPlayerTask();
 
   } else if (isIn(STATE_GAME_IDLE)) {
-    stateGameIdleRoutine();
+    stateGameIdleTask();
 
   } else if (isIn(STATE_GAME_REMOVAL)) {
-    stateGameRemovalRoutine();
+    stateGameRemovalTask();
 
   } else if (isIn(STATE_GAME_END)) {
-    stateGameEndRoutine();
+    stateGameEndTask();
 
   }
   clearButtons();
