@@ -23,22 +23,25 @@ const int PLAYER_HUMAN = 99;
 const int PLAYER_AI = 98;
 
 // Fixed patterns
-int x[] = {HIGH, LOW, HIGH, LOW};
-int y[] = {LOW, HIGH, LOW, HIGH};
+// int x[] = {HIGH, LOW, HIGH, LOW};
+// int y[] = {LOW, HIGH, LOW, HIGH};
 int on[] = {HIGH, HIGH, HIGH, HIGH};
 int off[] = {LOW, LOW, LOW, LOW};
 int player[] = {LOW, HIGH, HIGH, LOW};
 int end[] = {HIGH, LOW, LOW, HIGH};
 
 // Misc constants
-const byte ledArrayIntervalMicros = 1;
-const unsigned long ledBlinkIntervalMicros = 70000;
+const int ledArrayIntervalMicros = 1;
+const unsigned long ledBlinkIntervalMillis = 1000;
 const int buttonResponseIntervalMillis = 50;
+const int printIntervalMillis = 500;
 
 // Variables: general
 int currentState = STATE_IDLE;
 int currentLedCol = X; // for multiplexing the array lighting
 unsigned long lastPrintTimeMillis = 0;
+bool ledBlinkOn = false;
+unsigned long prevLedBlinkTimeMillis = 0;
 
 // Variables: buttons
 unsigned long prevLedArrayTimeMicros = 0;
@@ -73,6 +76,43 @@ void lightup(int x[], int y[]) {
     digitalWrite(B, ledColConfig[1]);
     digitalWrite(C, ledColConfig[2]);
     digitalWrite(D, ledColConfig[3]);
+    prevLedArrayTimeMicros = micros();
+  }
+}
+
+void blinkup(int x[], int y[]) {
+  if (micros() - prevLedArrayTimeMicros > ledArrayIntervalMicros) {
+    int* ledColConfig;
+    if (currentLedCol == Y) {
+      ledColConfig = x;
+      currentLedCol = X;
+    } else {
+      ledColConfig = y;
+      currentLedCol = Y;
+    }
+    int config[] = {LOW, LOW, LOW, LOW};
+    // already decided which config to show
+    // now need to decide whether 2 is on or off
+    for (int i = 0; i < 4; i++) {
+      config[i] = ledColConfig[i] == 1 ? HIGH : LOW;
+    }
+    if (millis() - prevLedBlinkTimeMillis > ledBlinkIntervalMillis) {
+      ledBlinkOn = !ledBlinkOn;
+      prevLedBlinkTimeMillis = millis();
+      for (int i = 0; i < 4; i++) {
+        if (ledColConfig[i] == 2) {
+          config[i] = ledBlinkOn ? HIGH : LOW;
+        }
+      }
+      // problem, not blinking
+    }
+
+    lightsOff();
+    digitalWrite(currentLedCol, LOW);
+    digitalWrite(A, config[0]);
+    digitalWrite(B, config[1]);
+    digitalWrite(C, config[2]);
+    digitalWrite(D, config[3]);
     prevLedArrayTimeMicros = micros();
   }
 }
@@ -152,6 +192,10 @@ void stateIdleRoutine() {
     int x[] = {1, 0, 0, 0};
     int y[] = {0, 0, 0, 1};
     lightup(on, on);
+  } else if (isHeld(BUTTON_RIGHT)) {
+    // blink top 2, solid btm 1, dark btm 1
+    int x[] = {0, 1, 2, 2};
+    blinkup(x, x);
   }
 }
 
@@ -273,7 +317,11 @@ bool isAnyPressed() {
 }
 
 void stateGameEndRoutine() {
-  lightup(end, end);
+  if (currentPlayer == PLAYER_AI) {
+    lightup(end, off);
+  } else {
+    lightup(off, end);
+  }
   if (isAnyPressed()) {
     currentState = STATE_IDLE;
   }
@@ -305,7 +353,7 @@ void checkButtons() {
 }
 
 void printButtons() {
-  if (millis() - lastPrintTimeMillis < 1000) {
+  if (millis() - lastPrintTimeMillis < printIntervalMillis) {
     return;
   }
   lastPrintTimeMillis = millis();
