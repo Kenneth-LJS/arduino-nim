@@ -8,7 +8,7 @@
 
 # Buttons
 ```
-[left] [right] - [select] [cancel]
+[X] [Y] - [SELECT] [CANCEL]
 ```
 
 # Usage
